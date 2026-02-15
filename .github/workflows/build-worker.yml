@@ -1,11 +1,7 @@
 name: Build RunPod Worker
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'runpod-worker/**'
-  workflow_dispatch: # allows manual trigger
+  workflow_dispatch: # manual trigger only — RunPod builds from GitHub directly
 
 env:
   REGISTRY: ghcr.io
