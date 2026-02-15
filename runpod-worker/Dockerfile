@@ -49,9 +49,8 @@ RUN cd ${WORKSPACE}/gaussian-splatting && \
 RUN cd ${WORKSPACE}/gaussian-splatting && \
     pip3 install --no-cache-dir -e submodules/simple-knn
 
-# Download Depth Anything V3 model weights
-RUN python3 -c "from huggingface_hub import hf_hub_download; \
-    hf_hub_download('depth-anything/Depth-Anything-V3-ViT-L', 'model.safetensors', local_dir='${WORKSPACE}/depth-anything-3/checkpoints')"
+# Download Depth Anything V3 model weights (DA3-LARGE, 0.35B params, Apache 2.0)
+RUN python3 -c "from depth_anything_3 import DepthAnything3; DepthAnything3.from_pretrained('depth-anything/DA3-LARGE')"
 
 # Copy handler
 COPY handler.py ${WORKSPACE}/handler.py

@@ -139,18 +139,42 @@ def run_colmap(images_dir: str, workspace_dir: str) -> str:
 
 def run_depth_anything(images_dir: str, output_dir: str) -> str:
     """Run Depth Anything V3 for monocular depth estimation."""
+    import torch
+    from PIL import Image
+    from depth_anything_3 import DepthAnything3
+
     os.makedirs(output_dir, exist_ok=True)
 
-    print("Running Depth Anything V3...")
-    subprocess.run([
-        sys.executable,
-        os.path.join(DEPTH_ANYTHING_PATH, "run.py"),
-        "--encoder", "vitl",
-        "--img-path", images_dir,
-        "--outdir", output_dir,
-        "--pred-only",
-        "--grayscale",
-    ], check=True, capture_output=True, cwd=DEPTH_ANYTHING_PATH)
+    print("Loading Depth Anything V3 (DA3-LARGE)...")
+    model = DepthAnything3.from_pretrained("depth-anything/DA3-LARGE")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
+
+    image_files = sorted([
+        f for f in os.listdir(images_dir)
+        if f.lower().endswith((".jpg", ".jpeg", ".png"))
+    ])
+
+    print(f"Running depth estimation on {len(image_files)} frames...")
+    for i, fname in enumerate(image_files):
+        img_path = os.path.join(images_dir, fname)
+        img = Image.open(img_path).convert("RGB")
+
+        with torch.no_grad():
+            depth = model.infer(img)
+
+        # Save depth map as 16-bit PNG
+        depth_np = depth.squeeze().cpu().numpy()
+        depth_normalized = ((depth_np - depth_np.min()) / (depth_np.max() - depth_np.min() + 1e-8) * 65535).astype(np.uint16)
+        depth_img = Image.fromarray(depth_normalized)
+        out_name = os.path.splitext(fname)[0] + ".png"
+        depth_img.save(os.path.join(output_dir, out_name))
+
+        if (i + 1) % 20 == 0:
+            print(f"  Depth: {i+1}/{len(image_files)} frames done")
+
+    del model
+    torch.cuda.empty_cache()
 
     num_depths = len([f for f in os.listdir(output_dir) if f.endswith(".png")])
     print(f"Generated {num_depths} depth maps")
