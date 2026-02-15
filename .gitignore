@@ -7,3 +7,6 @@ Thumbs.db
 
 # Node
 node_modules/
+Docker.dmg
+*.vsix
+*.dmg
