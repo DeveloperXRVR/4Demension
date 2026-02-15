@@ -404,4 +404,15 @@ def handler(event):
 
 
 if __name__ == "__main__":
+    # Pre-download model weights on worker startup (not per-job)
+    print("Pre-downloading Depth Anything V3 model weights...")
+    try:
+        from depth_anything_3 import DepthAnything3
+        _model = DepthAnything3.from_pretrained("depth-anything/DA3-LARGE")
+        del _model
+        print("Model weights cached successfully.")
+    except Exception as e:
+        print(f"WARNING: Could not pre-download model: {e}")
+        print("Model will be downloaded on first job.")
+
     runpod.serverless.start({"handler": handler})
