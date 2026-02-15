@@ -1,0 +1,9 @@
+# Cloned reference repo (large, not needed in GitHub - Dockerfile clones it separately)
+depth-anything-3/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
