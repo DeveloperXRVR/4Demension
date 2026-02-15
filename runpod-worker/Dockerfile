@@ -4,6 +4,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV WORKSPACE=/workspace
 
+# Required for building CUDA extensions without a GPU present
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
+ENV FORCE_CUDA=1
+ENV MAX_JOBS=2
+
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-dev \
@@ -33,10 +38,15 @@ RUN git clone https://github.com/ByteDance-Seed/depth-anything-3.git ${WORKSPACE
     cd ${WORKSPACE}/depth-anything-3 && \
     pip3 install --no-cache-dir -e .
 
-# Clone and install 3D Gaussian Splatting
-RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git ${WORKSPACE}/gaussian-splatting && \
-    cd ${WORKSPACE}/gaussian-splatting && \
-    pip3 install --no-cache-dir -e submodules/diff-gaussian-rasterization && \
+# Clone 3D Gaussian Splatting
+RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git ${WORKSPACE}/gaussian-splatting
+
+# Build diff-gaussian-rasterization (CUDA extension)
+RUN cd ${WORKSPACE}/gaussian-splatting && \
+    pip3 install --no-cache-dir -e submodules/diff-gaussian-rasterization
+
+# Build simple-knn (CUDA extension)
+RUN cd ${WORKSPACE}/gaussian-splatting && \
     pip3 install --no-cache-dir -e submodules/simple-knn
 
 # Download Depth Anything V3 model weights
