@@ -4,6 +4,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV WORKSPACE=/workspace
 
+# Headless rendering for COLMAP (no X11 display in container)
+ENV QT_QPA_PLATFORM=offscreen
+ENV XDG_RUNTIME_DIR=/tmp/runtime
+ENV MESA_GL_VERSION_OVERRIDE=3.3
+
 # Required for building CUDA extensions without a GPU present
 ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
 ENV FORCE_CUDA=1
