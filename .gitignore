@@ -10,3 +10,4 @@ node_modules/
 Docker.dmg
 *.vsix
 *.dmg
+webapp/public/uploads/
