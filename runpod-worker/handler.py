@@ -17,6 +17,7 @@ import time
 import shutil
 import subprocess
 import tempfile
+import base64
 import requests
 import runpod
 import numpy as np
@@ -330,9 +331,9 @@ def handler(event):
     job_input = event["input"]
     job_id = event.get("id", "unknown")
 
-    video_url = job_input["video_url"]
     quality = job_input.get("quality", "balanced")
     max_frames = job_input.get("max_frames", 200)
+    video_ext = job_input.get("video_ext", "mp4")
 
     # Create working directory
     work_dir = tempfile.mkdtemp(prefix="4d_", dir=WORKSPACE)
@@ -344,10 +345,22 @@ def handler(event):
     os.makedirs(colmap_dir, exist_ok=True)
 
     try:
-        # Step 1: Download video
-        runpod.serverless.progress_update(event, {"progress": 5, "message": "Downloading video..."})
-        video_path = os.path.join(work_dir, "input.mp4")
-        download_video(video_url, video_path)
+        # Step 1: Get video (base64 or URL)
+        runpod.serverless.progress_update(event, {"progress": 5, "message": "Receiving video..."})
+        video_path = os.path.join(work_dir, f"input.{video_ext}")
+
+        if "video_data" in job_input:
+            # Decode base64 video data
+            print("Decoding base64 video data...")
+            video_bytes = base64.b64decode(job_input["video_data"])
+            with open(video_path, "wb") as f:
+                f.write(video_bytes)
+            print(f"Video decoded: {len(video_bytes)} bytes")
+        elif "video_url" in job_input:
+            # Fallback: download from URL
+            download_video(job_input["video_url"], video_path)
+        else:
+            return {"error": "No video_data or video_url provided"}
 
         # Step 2: Extract frames
         runpod.serverless.progress_update(event, {"progress": 10, "message": "Extracting frames from video..."})

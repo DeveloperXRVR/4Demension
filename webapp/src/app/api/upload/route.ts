@@ -55,11 +55,12 @@ export async function POST(req: NextRequest) {
 
     if (useRunPod) {
       try {
-        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || req.nextUrl.origin;
-        const fullVideoUrl = `${baseUrl}${videoUrl}`;
+        // Send video as base64 directly to RunPod (no tunnel needed)
+        const videoBase64 = buffer.toString("base64");
 
         const runpodResponse = await submitJob({
-          video_url: fullVideoUrl,
+          video_data: videoBase64,
+          video_ext: ext,
           quality: quality as "fast" | "balanced" | "ultra",
           max_frames: maxFrames,
         });

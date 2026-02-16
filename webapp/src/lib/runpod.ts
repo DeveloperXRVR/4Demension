@@ -16,7 +16,8 @@ export interface RunPodJobResponse {
 }
 
 export async function submitJob(input: {
-  video_url: string;
+  video_data: string; // base64 encoded video
+  video_ext: string;
   quality: "fast" | "balanced" | "ultra";
   max_frames: number;
 }): Promise<{ id: string }> {
