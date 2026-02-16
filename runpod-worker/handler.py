@@ -102,7 +102,7 @@ def run_colmap(images_dir: str, workspace_dir: str) -> str:
         "--image_path", images_dir,
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_model", "OPENCV",
-        "--SiftExtraction.use_gpu", "1",
+        "--SiftExtraction.use_gpu", "0",
     ], check=True, capture_output=True)
 
     # Feature matching
@@ -111,7 +111,7 @@ def run_colmap(images_dir: str, workspace_dir: str) -> str:
         "colmap", "sequential_matcher",
         "--database_path", db_path,
         "--SequentialMatching.overlap", "10",
-        "--SiftMatching.use_gpu", "1",
+        "--SiftMatching.use_gpu", "0",
     ], check=True, capture_output=True)
 
     # Sparse reconstruction
