@@ -94,45 +94,85 @@ def run_colmap(images_dir: str, workspace_dir: str) -> str:
     sparse_dir = os.path.join(workspace_dir, "sparse")
     os.makedirs(sparse_dir, exist_ok=True)
 
-    # Feature extraction
+    num_images = len([f for f in os.listdir(images_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
+    print(f"COLMAP: Processing {num_images} images...")
+
+    if num_images < 3:
+        raise RuntimeError(f"Too few images for COLMAP ({num_images}). Need at least 3 frames.")
+
+    # Feature extraction — extract more features for better matching
     print("COLMAP: Feature extraction...")
-    subprocess.run([
+    result = subprocess.run([
         "colmap", "feature_extractor",
         "--database_path", db_path,
         "--image_path", images_dir,
         "--ImageReader.single_camera", "1",
-        "--ImageReader.camera_model", "OPENCV",
+        "--ImageReader.camera_model", "SIMPLE_RADIAL",
         "--SiftExtraction.use_gpu", "0",
-    ], check=True, capture_output=True)
+        "--SiftExtraction.max_num_features", "8192",
+        "--SiftExtraction.first_octave", "-1",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"COLMAP feature_extractor stderr: {result.stderr[-500:]}")
+        raise RuntimeError(f"COLMAP feature extraction failed: {result.stderr[-200:]}")
+    print("COLMAP: Feature extraction done")
 
-    # Feature matching
-    print("COLMAP: Feature matching...")
-    subprocess.run([
-        "colmap", "sequential_matcher",
+    # Feature matching — use exhaustive for better results with video
+    print("COLMAP: Feature matching (exhaustive)...")
+    result = subprocess.run([
+        "colmap", "exhaustive_matcher",
         "--database_path", db_path,
-        "--SequentialMatching.overlap", "10",
         "--SiftMatching.use_gpu", "0",
-    ], check=True, capture_output=True)
+        "--ExhaustiveMatching.block_size", "50",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"COLMAP exhaustive_matcher stderr: {result.stderr[-500:]}")
+        raise RuntimeError(f"COLMAP feature matching failed: {result.stderr[-200:]}")
+    print("COLMAP: Feature matching done")
 
-    # Sparse reconstruction
-    print("COLMAP: Sparse reconstruction...")
-    subprocess.run([
+    # Sparse reconstruction with relaxed settings
+    print("COLMAP: Sparse reconstruction (mapper)...")
+    result = subprocess.run([
         "colmap", "mapper",
         "--database_path", db_path,
         "--image_path", images_dir,
         "--output_path", sparse_dir,
-    ], check=True, capture_output=True)
+        "--Mapper.init_min_num_inliers", "10",
+        "--Mapper.multiple_models", "1",
+        "--Mapper.extract_colors", "1",
+        "--Mapper.ba_global_max_num_iterations", "30",
+        "--Mapper.min_num_matches", "10",
+        "--Mapper.init_min_tri_angle", "2",
+    ], capture_output=True, text=True)
+    print(f"COLMAP mapper stdout (last 500): {result.stdout[-500:]}")
+    if result.returncode != 0:
+        print(f"COLMAP mapper stderr: {result.stderr[-500:]}")
+        raise RuntimeError(f"COLMAP sparse reconstruction failed: {result.stderr[-200:]}")
+
+    # Find the best reconstruction (largest model)
+    model_dirs = sorted([
+        d for d in os.listdir(sparse_dir)
+        if os.path.isdir(os.path.join(sparse_dir, d))
+    ])
+    if not model_dirs:
+        raise RuntimeError("COLMAP produced no sparse models. Try a video with more camera movement and textured surfaces.")
+    
+    best_model = os.path.join(sparse_dir, model_dirs[0])
+    print(f"COLMAP: Found {len(model_dirs)} model(s), using: {model_dirs[0]}")
 
     # Undistort images
     dense_dir = os.path.join(workspace_dir, "dense")
     print("COLMAP: Image undistortion...")
-    subprocess.run([
+    result = subprocess.run([
         "colmap", "image_undistorter",
         "--image_path", images_dir,
-        "--input_path", os.path.join(sparse_dir, "0"),
+        "--input_path", best_model,
         "--output_path", dense_dir,
         "--output_type", "COLMAP",
-    ], check=True, capture_output=True)
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"COLMAP image_undistorter stderr: {result.stderr[-500:]}")
+        raise RuntimeError(f"COLMAP image undistortion failed: {result.stderr[-200:]}")
 
     print("COLMAP: Done")
     return sparse_dir
