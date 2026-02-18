@@ -174,6 +174,18 @@ def run_colmap(images_dir: str, workspace_dir: str) -> str:
         print(f"COLMAP image_undistorter stderr: {result.stderr[-500:]}")
         raise RuntimeError(f"COLMAP image undistortion failed: {result.stderr[-200:]}")
 
+    # 3DGS expects sparse model in dense/sparse/0/ but undistorter puts it in dense/sparse/
+    sparse_in_dense = os.path.join(dense_dir, "sparse")
+    sparse_0_dir = os.path.join(sparse_in_dense, "0")
+    if os.path.exists(sparse_in_dense) and not os.path.exists(sparse_0_dir):
+        # Check if model files are directly in sparse/ (not in 0/)
+        model_files = [f for f in os.listdir(sparse_in_dense) if f.endswith((".bin", ".txt"))]
+        if model_files:
+            os.makedirs(sparse_0_dir, exist_ok=True)
+            for f in model_files:
+                shutil.move(os.path.join(sparse_in_dense, f), os.path.join(sparse_0_dir, f))
+            print(f"COLMAP: Moved {len(model_files)} sparse model files to sparse/0/")
+
     print("COLMAP: Done")
     return sparse_dir
 
