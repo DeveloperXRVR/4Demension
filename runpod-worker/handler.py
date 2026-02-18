@@ -182,7 +182,7 @@ def run_depth_anything(images_dir: str, output_dir: str) -> str:
     """Run Depth Anything V3 for monocular depth estimation."""
     import torch
     from PIL import Image
-    from depth_anything_3 import DepthAnything3
+    from depth_anything_3.api import DepthAnything3
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -195,26 +195,32 @@ def run_depth_anything(images_dir: str, output_dir: str) -> str:
         f for f in os.listdir(images_dir)
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     ])
+    image_paths = [os.path.join(images_dir, f) for f in image_files]
 
     print(f"Running depth estimation on {len(image_files)} frames...")
+
+    # Process in batches to manage memory
+    batch_size = 8
+    all_depths = []
+    for batch_start in range(0, len(image_paths), batch_size):
+        batch_paths = image_paths[batch_start:batch_start + batch_size]
+        prediction = model.inference(image=batch_paths)
+        all_depths.append(prediction.depth)  # (B, H, W) numpy array
+        if (batch_start + batch_size) % 24 == 0 or batch_start + batch_size >= len(image_paths):
+            print(f"  Depth: {min(batch_start + batch_size, len(image_paths))}/{len(image_files)} frames done")
+
+    # Concatenate all depth maps
+    depths = np.concatenate(all_depths, axis=0)  # (N, H, W)
+
+    # Save each depth map as 16-bit PNG
     for i, fname in enumerate(image_files):
-        img_path = os.path.join(images_dir, fname)
-        img = Image.open(img_path).convert("RGB")
-
-        with torch.no_grad():
-            depth = model.infer(img)
-
-        # Save depth map as 16-bit PNG
-        depth_np = depth.squeeze().cpu().numpy()
+        depth_np = depths[i]
         depth_normalized = ((depth_np - depth_np.min()) / (depth_np.max() - depth_np.min() + 1e-8) * 65535).astype(np.uint16)
         depth_img = Image.fromarray(depth_normalized)
         out_name = os.path.splitext(fname)[0] + ".png"
         depth_img.save(os.path.join(output_dir, out_name))
 
-        if (i + 1) % 20 == 0:
-            print(f"  Depth: {i+1}/{len(image_files)} frames done")
-
-    del model
+    del model, all_depths, depths
     torch.cuda.empty_cache()
 
     num_depths = len([f for f in os.listdir(output_dir) if f.endswith(".png")])
@@ -460,7 +466,7 @@ if __name__ == "__main__":
     # Pre-download model weights on worker startup (not per-job)
     print("Pre-downloading Depth Anything V3 model weights...")
     try:
-        from depth_anything_3 import DepthAnything3
+        from depth_anything_3.api import DepthAnything3
         _model = DepthAnything3.from_pretrained("depth-anything/DA3-LARGE")
         del _model
         print("Model weights cached successfully.")
