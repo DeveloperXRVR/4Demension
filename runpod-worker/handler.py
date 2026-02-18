@@ -242,16 +242,20 @@ def train_gaussian_splatting(
     num_iter = iterations.get(quality, 15000)
 
     print(f"Training 3D Gaussian Splatting ({quality}: {num_iter} iterations)...")
-    subprocess.run([
+    train_cmd = [
         sys.executable,
         os.path.join(GAUSSIAN_SPLATTING_PATH, "train.py"),
         "-s", colmap_dir,
         "-m", output_dir,
         "--iterations", str(num_iter),
-        "--depth_regularization",
-        "--depth_path", depth_dir,
         "--save_iterations", str(num_iter),
-    ], check=True, capture_output=True, cwd=GAUSSIAN_SPLATTING_PATH)
+        "--quiet",
+    ]
+    print(f"Running: {' '.join(train_cmd)}")
+    result = subprocess.run(train_cmd, capture_output=True, text=True, cwd=GAUSSIAN_SPLATTING_PATH)
+    if result.returncode != 0:
+        print(f"3DGS train stderr: {result.stderr[-500:]}")
+        raise RuntimeError(f"3DGS training failed: {result.stderr[-300:]}")
 
     # Find the output PLY
     ply_path = os.path.join(output_dir, "point_cloud", f"iteration_{num_iter}", "point_cloud.ply")
