@@ -36,8 +36,27 @@ export async function GET(
           });
           break;
         case "COMPLETED":
-          if (rpStatus.output?.model_url) {
-            // Download model from RunPod output and save locally
+          if (rpStatus.output?.splat_data) {
+            // Decode base64 splat data from RunPod and save locally
+            try {
+              const splatBuffer = Buffer.from(rpStatus.output.splat_data, "base64");
+              const { saveModel } = await import("@/lib/storage");
+              const modelUrl = await saveModel(jobId, splatBuffer, "splat");
+              updateJob(jobId, {
+                status: "completed",
+                progress: 100,
+                message: "3D model reconstruction complete!",
+                modelUrl,
+              });
+            } catch (dlErr) {
+              console.error("Splat save error:", dlErr);
+              updateJob(jobId, {
+                status: "failed",
+                message: "Failed to save 3D model",
+              });
+            }
+          } else if (rpStatus.output?.model_url) {
+            // Fallback: download from URL
             try {
               const modelRes = await fetch(rpStatus.output.model_url);
               const modelBuffer = Buffer.from(await modelRes.arrayBuffer());
@@ -52,12 +71,20 @@ export async function GET(
             } catch (dlErr) {
               console.error("Model download error:", dlErr);
               updateJob(jobId, {
-                status: "completed",
-                progress: 100,
-                message: "Model ready!",
-                modelUrl: rpStatus.output.model_url,
+                status: "failed",
+                message: "Failed to download 3D model",
               });
             }
+          } else if (rpStatus.output?.error) {
+            updateJob(jobId, {
+              status: "failed",
+              message: rpStatus.output.error,
+            });
+          } else {
+            updateJob(jobId, {
+              status: "failed",
+              message: "Processing completed but no model data returned",
+            });
           }
           break;
         case "FAILED":

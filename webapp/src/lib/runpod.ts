@@ -6,11 +6,13 @@ export interface RunPodJobResponse {
   id: string;
   status: "IN_QUEUE" | "IN_PROGRESS" | "COMPLETED" | "FAILED" | "CANCELLED";
   output?: {
+    splat_data?: string;
     model_url?: string;
     preview_url?: string;
     num_frames?: number;
     progress?: number;
     message?: string;
+    error?: string;
   };
   error?: string;
 }
