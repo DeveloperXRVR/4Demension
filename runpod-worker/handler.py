@@ -316,7 +316,7 @@ def convert_ply_to_splat(ply_path: str, splat_path: str) -> str:
 
 
 def handler(event):
-    """RunPod serverless handler."""
+    """RunPod serverless entrypoint."""
     job_input = event["input"]
     job_id = event.get("id", "unknown")
 
