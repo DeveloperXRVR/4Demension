@@ -14,8 +14,12 @@ export interface Job {
   updatedAt: number;
 }
 
-// In-memory job store (use a DB in production)
-const jobs = new Map<string, Job>();
+// In-memory job store that survives HMR in dev mode
+const globalForJobs = globalThis as unknown as { __jobs?: Map<string, Job> };
+if (!globalForJobs.__jobs) {
+  globalForJobs.__jobs = new Map<string, Job>();
+}
+const jobs = globalForJobs.__jobs;
 
 export function createJob(data: Omit<Job, "createdAt" | "updatedAt">): Job {
   const now = Date.now();

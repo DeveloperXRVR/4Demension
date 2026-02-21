@@ -82,9 +82,10 @@ def extract_frames(video_path: str, output_dir: str, max_frames: int = 100) -> i
     return num_frames
 
 
-def run_da3_gaussian_splatting(images_dir: str, export_dir: str) -> str:
-    """Run DA3 with built-in Gaussian Splatting to generate PLY directly."""
+def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 500000) -> str:
+    """Run DA3 depth estimation + camera poses, build colored 3D point cloud."""
     import torch
+    from PIL import Image
     from depth_anything_3.api import DepthAnything3
 
     print("Loading Depth Anything V3 (DA3-LARGE)...")
@@ -98,39 +99,131 @@ def run_da3_gaussian_splatting(images_dir: str, export_dir: str) -> str:
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     ])
     image_paths = [os.path.join(images_dir, f) for f in image_files]
-    print(f"Running DA3 Gaussian Splatting on {len(image_paths)} frames...")
+    print(f"Running DA3 depth estimation on {len(image_paths)} frames...")
 
-    # Run DA3 with Gaussian Splatting enabled — single pass does everything
+    # Run DA3 inference — depth maps + camera poses (no GS branch)
     prediction = model.inference(
         image=image_paths,
-        infer_gs=True,
-        export_dir=export_dir,
-        export_format="gs_ply",
+        infer_gs=False,
     )
 
-    print(f"DA3 inference complete. Depth shape: {prediction.depth.shape}")
-    if prediction.gaussians is not None:
-        print(f"Gaussians generated: {prediction.gaussians.means.shape[0]} splats")
+    depths = prediction.depth          # (N, H, W) numpy
+    extrinsics = prediction.extrinsics  # (N, 4, 4) numpy w2c
+    intrinsics = prediction.intrinsics  # (N, 3, 3) numpy
+    proc_imgs = prediction.processed_images  # (N, H, W, 3) uint8 numpy
+
+    print(f"DA3 done. Depth: {depths.shape}, Extrinsics: {extrinsics.shape}")
 
     del model
     torch.cuda.empty_cache()
 
-    # Find the exported PLY
-    ply_path = os.path.join(export_dir, "gs_ply", "0000.ply")
-    if not os.path.exists(ply_path):
-        # Search for any PLY in export dir
-        for root, dirs, files in os.walk(export_dir):
-            for f in files:
-                if f.endswith(".ply"):
-                    ply_path = os.path.join(root, f)
-                    print(f"Found PLY at: {ply_path}")
-                    break
+    N, H, W = depths.shape
 
-    if not os.path.exists(ply_path):
-        raise RuntimeError(f"DA3 did not produce a PLY file in {export_dir}")
+    # Decide how many pixels to sample per frame
+    total_pixels = N * H * W
+    pixels_per_frame = max(1, max_points // N)
+    step = max(1, int(np.sqrt(H * W / pixels_per_frame)))
+    print(f"Sampling every {step} pixels per frame ({pixels_per_frame} target/frame)")
 
-    print(f"PLY exported: {ply_path} ({os.path.getsize(ply_path) / 1024 / 1024:.1f} MB)")
+    # Build pixel grid (subsampled)
+    v_idx, u_idx = np.mgrid[0:H:step, 0:W:step]  # (Hs, Ws)
+    v_flat = v_idx.ravel().astype(np.float32)
+    u_flat = u_idx.ravel().astype(np.float32)
+    pts_per_grid = len(u_flat)
+
+    all_points = []
+    all_colors = []
+
+    for i in range(N):
+        depth = depths[i]  # (H, W)
+        K = intrinsics[i]  # (3, 3)
+        E = extrinsics[i]  # (4, 4) w2c
+
+        # Sample depth and color at grid points
+        d = depth[v_idx, u_idx].ravel()  # (pts,)
+        colors_rgb = proc_imgs[i][v_idx, u_idx].reshape(-1, 3)  # (pts, 3)
+
+        # Filter invalid depth
+        valid = d > 1e-3
+        d = d[valid]
+        u_v = u_flat[valid]
+        v_v = v_flat[valid]
+        colors_v = colors_rgb[valid].astype(np.float32) / 255.0
+
+        if len(d) == 0:
+            continue
+
+        # Unproject to camera space
+        fx, fy = K[0, 0], K[1, 1]
+        cx, cy = K[0, 2], K[1, 2]
+        x_cam = (u_v - cx) * d / fx
+        y_cam = (v_v - cy) * d / fy
+        z_cam = d
+        pts_cam = np.stack([x_cam, y_cam, z_cam], axis=-1)  # (pts, 3)
+
+        # w2c → c2w: invert the extrinsic matrix
+        R = E[:3, :3]
+        t = E[:3, 3]
+        R_inv = R.T
+        t_inv = -R.T @ t
+        pts_world = (R_inv @ pts_cam.T).T + t_inv  # (pts, 3)
+
+        all_points.append(pts_world.astype(np.float32))
+        all_colors.append(colors_v)
+
+    points = np.concatenate(all_points, axis=0)
+    colors = np.concatenate(all_colors, axis=0)
+
+    # Random subsample if still too many
+    if len(points) > max_points:
+        idx = np.random.choice(len(points), max_points, replace=False)
+        points = points[idx]
+        colors = colors[idx]
+
+    print(f"Point cloud: {len(points)} points")
+
+    # Save as PLY
+    ply_path = os.path.join(export_dir, "reconstruction.ply")
+    _save_pointcloud_ply(points, colors, ply_path)
+
     return ply_path
+
+
+def _save_pointcloud_ply(points: np.ndarray, colors: np.ndarray, path: str):
+    """Save colored point cloud as binary PLY."""
+    N = len(points)
+    header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        f"element vertex {N}\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "property uchar red\n"
+        "property uchar green\n"
+        "property uchar blue\n"
+        "end_header\n"
+    )
+    # Build binary data with numpy for speed
+    rgb = np.clip(colors * 255, 0, 255).astype(np.uint8)
+    # Interleave: 3 floats + 3 bytes = 15 bytes per point
+    dt = np.dtype([
+        ('x', '<f4'), ('y', '<f4'), ('z', '<f4'),
+        ('r', 'u1'), ('g', 'u1'), ('b', 'u1'),
+    ])
+    structured = np.empty(N, dtype=dt)
+    structured['x'] = points[:, 0]
+    structured['y'] = points[:, 1]
+    structured['z'] = points[:, 2]
+    structured['r'] = rgb[:, 0]
+    structured['g'] = rgb[:, 1]
+    structured['b'] = rgb[:, 2]
+
+    with open(path, 'wb') as f:
+        f.write(header.encode('ascii'))
+        f.write(structured.tobytes())
+
+    print(f"Saved PLY: {path} ({os.path.getsize(path) / 1024 / 1024:.1f} MB)")
 
 
 def convert_ply_to_splat(ply_path: str, splat_path: str) -> str:
@@ -259,9 +352,9 @@ def handler(event):
         if num_frames < 2:
             return {"error": f"Only {num_frames} frame(s) extracted. Need at least 2. Try a longer video."}
 
-        # Step 3: DA3 — depth + poses + Gaussian Splats in one pass
-        runpod.serverless.progress_update(event, {"progress": 20, "message": "Running Depth Anything V3 + Gaussian Splatting..."})
-        ply_path = run_da3_gaussian_splatting(images_dir, export_dir)
+        # Step 3: DA3 — depth estimation + camera poses → 3D point cloud
+        runpod.serverless.progress_update(event, {"progress": 20, "message": "Running Depth Anything V3 reconstruction..."})
+        ply_path = run_da3_reconstruction(images_dir, export_dir)
 
         # Step 4: Convert to .splat for web viewer
         runpod.serverless.progress_update(event, {"progress": 80, "message": "Converting to web format..."})

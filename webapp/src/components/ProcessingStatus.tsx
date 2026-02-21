@@ -58,14 +58,11 @@ const statusConfig = {
 };
 
 const pipelineSteps = [
-  { id: "extract", label: "Extract Frames", threshold: 5 },
-  { id: "sfm", label: "Structure from Motion (COLMAP)", threshold: 15 },
-  { id: "poses", label: "Camera Pose Estimation", threshold: 30 },
-  { id: "depth", label: "Depth Anything V3 Estimation", threshold: 45 },
-  { id: "init", label: "Initialize Gaussian Splatting", threshold: 60 },
-  { id: "train", label: "Train 3DGS Model", threshold: 75 },
-  { id: "export", label: "Export .splat File", threshold: 90 },
-  { id: "optimize", label: "Web Optimization", threshold: 95 },
+  { id: "receive", label: "Receiving Video", threshold: 5 },
+  { id: "extract", label: "Extracting Frames", threshold: 10 },
+  { id: "da3", label: "Depth Anything V3 + Gaussian Splatting", threshold: 20 },
+  { id: "convert", label: "Converting to Web Format", threshold: 80 },
+  { id: "encode", label: "Encoding Result", threshold: 90 },
 ];
 
 export default function ProcessingStatus({ jobId }: { jobId: string }) {
