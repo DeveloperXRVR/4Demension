@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Clone and install Depth Anything V3
 RUN git clone https://github.com/ByteDance-Seed/depth-anything-3.git ${WORKSPACE}/depth-anything-3 && \
     cd ${WORKSPACE}/depth-anything-3 && \
-    pip install --no-cache-dir -e .
+    pip install --no-cache-dir --ignore-installed -e .
 
 # Model weights will be downloaded at runtime (first job start)
 # This avoids build-time HuggingFace auth issues
