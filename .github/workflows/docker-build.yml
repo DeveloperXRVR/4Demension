@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/4demension-worker
+  IMAGE_NAME: developerxrvr/4demension-worker
 
 jobs:
   build:
