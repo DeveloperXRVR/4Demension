@@ -320,6 +320,51 @@ def handler(event):
     job_input = event["input"]
     job_id = event.get("id", "unknown")
 
+    # Diagnostic mode — test imports, GPU, model loading
+    if job_input.get("diagnose"):
+        diag = {"gpu": False, "imports": [], "errors": []}
+        try:
+            import torch
+            diag["torch"] = torch.__version__
+            diag["gpu"] = torch.cuda.is_available()
+            diag["gpu_name"] = torch.cuda.get_device_name(0) if diag["gpu"] else "N/A"
+            diag["gpu_mem_gb"] = round(torch.cuda.get_device_properties(0).total_mem / 1e9, 1) if diag["gpu"] else 0
+        except Exception as e:
+            diag["errors"].append(f"torch: {e}")
+        try:
+            from depth_anything_3.api import DepthAnything3
+            diag["imports"].append("depth_anything_3.api")
+        except Exception as e:
+            diag["errors"].append(f"da3 import: {e}")
+        try:
+            from plyfile import PlyData
+            diag["imports"].append("plyfile")
+        except Exception as e:
+            diag["errors"].append(f"plyfile: {e}")
+        try:
+            from PIL import Image
+            diag["imports"].append("PIL")
+        except Exception as e:
+            diag["errors"].append(f"PIL: {e}")
+        try:
+            from addict import Dict as AddictDict
+            diag["imports"].append("addict")
+        except Exception as e:
+            diag["errors"].append(f"addict: {e}")
+        # Test model loading if requested
+        if job_input.get("load_model"):
+            try:
+                import torch
+                from depth_anything_3.api import DepthAnything3
+                model = DepthAnything3.from_pretrained("depth-anything/DA3-LARGE")
+                diag["model_loaded"] = True
+                del model
+                torch.cuda.empty_cache()
+            except Exception as e:
+                diag["errors"].append(f"model load: {e}")
+                diag["model_loaded"] = False
+        return diag
+
     max_frames = job_input.get("max_frames", 100)
     video_ext = job_input.get("video_ext", "mp4")
 
