@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { gunzipSync } from "zlib";
 import { getJob, updateJob } from "@/lib/jobs";
 import { getJobStatus } from "@/lib/runpod";
 
@@ -38,8 +39,14 @@ export async function GET(
         case "COMPLETED":
           if (rpStatus.output?.splat_data) {
             // Decode base64 splat data from RunPod and save locally
+            // Data may be gzip-compressed (splat_compressed flag)
             try {
-              const splatBuffer = Buffer.from(rpStatus.output.splat_data, "base64");
+              let splatBuffer = Buffer.from(rpStatus.output.splat_data, "base64");
+              if (rpStatus.output.splat_compressed) {
+                console.log(`Decompressing gzip splat: ${(splatBuffer.length / 1024 / 1024).toFixed(1)} MB compressed`);
+                splatBuffer = gunzipSync(splatBuffer);
+                console.log(`Decompressed: ${(splatBuffer.length / 1024 / 1024).toFixed(1)} MB`);
+              }
               const { saveModel } = await import("@/lib/storage");
               const modelUrl = await saveModel(jobId, splatBuffer, "splat");
               updateJob(jobId, {

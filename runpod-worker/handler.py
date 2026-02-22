@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import base64
+import gzip
 import struct
 import requests
 import runpod
@@ -353,7 +354,7 @@ def handler(event):
             diag["torch"] = torch.__version__
             diag["gpu"] = torch.cuda.is_available()
             diag["gpu_name"] = torch.cuda.get_device_name(0) if diag["gpu"] else "N/A"
-            diag["gpu_mem_gb"] = round(torch.cuda.get_device_properties(0).total_mem / 1e9, 1) if diag["gpu"] else 0
+            diag["gpu_mem_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1) if diag["gpu"] else 0
         except Exception as e:
             diag["errors"].append(f"torch: {e}")
         try:
@@ -431,16 +432,22 @@ def handler(event):
         splat_path = os.path.join(work_dir, f"{job_id}.splat")
         convert_ply_to_splat(ply_path, splat_path)
 
-        # Step 5: Return result as base64 (no cloud storage needed)
-        runpod.serverless.progress_update(event, {"progress": 90, "message": "Encoding result..."})
+        # Step 5: Gzip compress + base64 encode (RunPod has ~10MB payload limit)
+        runpod.serverless.progress_update(event, {"progress": 90, "message": "Compressing & encoding result..."})
         with open(splat_path, "rb") as f:
-            splat_data = base64.b64encode(f.read()).decode("utf-8")
+            raw_data = f.read()
+        compressed = gzip.compress(raw_data, compresslevel=6)
+        splat_data = base64.b64encode(compressed).decode("utf-8")
 
-        file_size_mb = os.path.getsize(splat_path) / (1024 * 1024)
-        print(f"Returning splat: {file_size_mb:.1f} MB, {num_frames} frames processed")
+        raw_mb = len(raw_data) / (1024 * 1024)
+        compressed_mb = len(compressed) / (1024 * 1024)
+        b64_mb = len(splat_data) / (1024 * 1024)
+        print(f"Splat: {raw_mb:.1f} MB raw → {compressed_mb:.1f} MB gzip → {b64_mb:.1f} MB base64")
+        print(f"Frames processed: {num_frames}")
 
         return {
             "splat_data": splat_data,
+            "splat_compressed": True,
             "num_frames": num_frames,
             "progress": 100,
             "message": "3D reconstruction complete!",

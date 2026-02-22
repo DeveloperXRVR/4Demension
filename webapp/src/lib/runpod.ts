@@ -7,6 +7,7 @@ export interface RunPodJobResponse {
   status: "IN_QUEUE" | "IN_PROGRESS" | "COMPLETED" | "FAILED" | "CANCELLED";
   output?: {
     splat_data?: string;
+    splat_compressed?: boolean;
     model_url?: string;
     preview_url?: string;
     num_frames?: number;
