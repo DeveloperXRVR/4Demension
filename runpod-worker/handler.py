@@ -82,16 +82,13 @@ def extract_frames(video_path: str, output_dir: str, max_frames: int = 100) -> i
     return num_frames
 
 
-def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 500000) -> str:
-    """Run DA3 depth estimation + camera poses, build colored 3D point cloud."""
-    import torch
-    from PIL import Image
-    from depth_anything_3.api import DepthAnything3
+MODEL_ID = "depth-anything/DA3NESTED-GIANT-LARGE"
 
-    print("Loading Depth Anything V3 (DA3-LARGE)...")
-    model = DepthAnything3.from_pretrained("depth-anything/DA3-LARGE")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device).eval()
+
+def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 500000) -> str:
+    """Run DA3 depth + GS reconstruction.  Tries built-in gs_ply first, falls back to manual point cloud."""
+    import torch
+    from depth_anything_3.api import DepthAnything3
 
     # Collect image paths
     image_files = sorted([
@@ -99,18 +96,58 @@ def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 5
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     ])
     image_paths = [os.path.join(images_dir, f) for f in image_files]
-    print(f"Running DA3 depth estimation on {len(image_paths)} frames...")
+    print(f"Running DA3 on {len(image_paths)} frames...")
 
-    # Run DA3 inference — depth maps + camera poses (no GS branch)
-    prediction = model.inference(
-        image=image_paths,
-        infer_gs=False,
-    )
+    print(f"Loading Depth Anything V3 ({MODEL_ID})...")
+    model = DepthAnything3.from_pretrained(MODEL_ID)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
+    print(f"Model loaded on {device}")
 
-    depths = prediction.depth          # (N, H, W) numpy
-    extrinsics = prediction.extrinsics  # (N, 4, 4) numpy w2c
-    intrinsics = prediction.intrinsics  # (N, 3, 3) numpy
-    proc_imgs = prediction.processed_images  # (N, H, W, 3) uint8 numpy
+    # --- Attempt 1: built-in Gaussian Splatting export ---
+    gs_ply_path = os.path.join(export_dir, "gs_ply", "000.ply")
+    try:
+        print("Running DA3 with infer_gs=True + gs_ply export...")
+        prediction = model.inference(
+            image=image_paths,
+            infer_gs=True,
+            export_dir=export_dir,
+            export_format="gs_ply",
+            ref_view_strategy="middle",
+        )
+        # DA3 saves gs_ply under export_dir/gs_ply/
+        # Find the actual PLY file
+        gs_dir = os.path.join(export_dir, "gs_ply")
+        if os.path.isdir(gs_dir):
+            ply_files = [f for f in os.listdir(gs_dir) if f.endswith(".ply")]
+            if ply_files:
+                gs_ply_path = os.path.join(gs_dir, ply_files[0])
+                size_mb = os.path.getsize(gs_ply_path) / (1024 * 1024)
+                print(f"GS PLY exported: {gs_ply_path} ({size_mb:.1f} MB)")
+                del model
+                torch.cuda.empty_cache()
+                return gs_ply_path
+        print("GS PLY export dir empty, falling back to manual point cloud")
+    except Exception as e:
+        print(f"GS export failed ({e}), falling back to manual point cloud")
+
+    # --- Attempt 2: manual point cloud from depth maps ---
+    print("Running DA3 depth-only inference...")
+    try:
+        prediction = model.inference(
+            image=image_paths,
+            infer_gs=False,
+            ref_view_strategy="middle",
+        )
+    except Exception as e:
+        del model
+        torch.cuda.empty_cache()
+        raise RuntimeError(f"DA3 inference failed: {e}")
+
+    depths = prediction.depth               # (N, H, W)
+    extrinsics = prediction.extrinsics      # (N, 3, 4) w2c
+    intrinsics = prediction.intrinsics      # (N, 3, 3)
+    proc_imgs = prediction.processed_images # (N, H, W, 3) uint8
 
     print(f"DA3 done. Depth: {depths.shape}, Extrinsics: {extrinsics.shape}")
 
@@ -118,55 +155,46 @@ def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 5
     torch.cuda.empty_cache()
 
     N, H, W = depths.shape
-
-    # Decide how many pixels to sample per frame
-    total_pixels = N * H * W
     pixels_per_frame = max(1, max_points // N)
     step = max(1, int(np.sqrt(H * W / pixels_per_frame)))
-    print(f"Sampling every {step} pixels per frame ({pixels_per_frame} target/frame)")
+    print(f"Sampling every {step} pixels/frame ({pixels_per_frame} target/frame)")
 
-    # Build pixel grid (subsampled)
-    v_idx, u_idx = np.mgrid[0:H:step, 0:W:step]  # (Hs, Ws)
+    v_idx, u_idx = np.mgrid[0:H:step, 0:W:step]
     v_flat = v_idx.ravel().astype(np.float32)
     u_flat = u_idx.ravel().astype(np.float32)
-    pts_per_grid = len(u_flat)
 
     all_points = []
     all_colors = []
 
     for i in range(N):
-        depth = depths[i]  # (H, W)
-        K = intrinsics[i]  # (3, 3)
-        E = extrinsics[i]  # (4, 4) w2c
+        depth = depths[i]
+        K = intrinsics[i]       # (3, 3)
+        E = extrinsics[i]       # (3, 4) w2c
 
-        # Sample depth and color at grid points
-        d = depth[v_idx, u_idx].ravel()  # (pts,)
-        colors_rgb = proc_imgs[i][v_idx, u_idx].reshape(-1, 3)  # (pts, 3)
+        d = depth[v_idx, u_idx].ravel()
+        colors_rgb = proc_imgs[i][v_idx, u_idx].reshape(-1, 3)
 
-        # Filter invalid depth
         valid = d > 1e-3
         d = d[valid]
         u_v = u_flat[valid]
         v_v = v_flat[valid]
         colors_v = colors_rgb[valid].astype(np.float32) / 255.0
-
         if len(d) == 0:
             continue
 
-        # Unproject to camera space
         fx, fy = K[0, 0], K[1, 1]
         cx, cy = K[0, 2], K[1, 2]
         x_cam = (u_v - cx) * d / fx
         y_cam = (v_v - cy) * d / fy
         z_cam = d
-        pts_cam = np.stack([x_cam, y_cam, z_cam], axis=-1)  # (pts, 3)
+        pts_cam = np.stack([x_cam, y_cam, z_cam], axis=-1)
 
-        # w2c → c2w: invert the extrinsic matrix
+        # Extrinsics are (3, 4) w2c — extract R (3,3) and t (3,)
         R = E[:3, :3]
         t = E[:3, 3]
         R_inv = R.T
         t_inv = -R.T @ t
-        pts_world = (R_inv @ pts_cam.T).T + t_inv  # (pts, 3)
+        pts_world = (R_inv @ pts_cam.T).T + t_inv
 
         all_points.append(pts_world.astype(np.float32))
         all_colors.append(colors_v)
@@ -174,7 +202,6 @@ def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 5
     points = np.concatenate(all_points, axis=0)
     colors = np.concatenate(all_colors, axis=0)
 
-    # Random subsample if still too many
     if len(points) > max_points:
         idx = np.random.choice(len(points), max_points, replace=False)
         points = points[idx]
@@ -182,10 +209,8 @@ def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 5
 
     print(f"Point cloud: {len(points)} points")
 
-    # Save as PLY
     ply_path = os.path.join(export_dir, "reconstruction.ply")
     _save_pointcloud_ply(points, colors, ply_path)
-
     return ply_path
 
 
@@ -356,7 +381,7 @@ def handler(event):
             try:
                 import torch
                 from depth_anything_3.api import DepthAnything3
-                model = DepthAnything3.from_pretrained("depth-anything/DA3-LARGE")
+                model = DepthAnything3.from_pretrained(MODEL_ID)
                 diag["model_loaded"] = True
                 del model
                 torch.cuda.empty_cache()
@@ -440,14 +465,18 @@ def handler(event):
 
 
 if __name__ == "__main__":
-    print("Pre-downloading Depth Anything V3 model weights...")
+    print(f"Pre-downloading Depth Anything V3 model weights ({MODEL_ID})...")
     try:
         from depth_anything_3.api import DepthAnything3
-        _model = DepthAnything3.from_pretrained("depth-anything/DA3-LARGE")
+        _model = DepthAnything3.from_pretrained(MODEL_ID)
         del _model
+        import torch
+        torch.cuda.empty_cache()
         print("Model weights cached successfully.")
     except Exception as e:
         print(f"WARNING: Could not pre-download model: {e}")
+        import traceback
+        traceback.print_exc()
         print("Model will be downloaded on first job.")
 
     runpod.serverless.start({"handler": handler})
