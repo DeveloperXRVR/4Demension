@@ -86,7 +86,7 @@ def extract_frames(video_path: str, output_dir: str, max_frames: int = 100) -> i
 MODEL_ID = "depth-anything/DA3NESTED-GIANT-LARGE"
 
 
-def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 1000000, density_factor: float = 2.0) -> str:
+def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 500000, density_factor: float = 2.0) -> str:
     """Run DA3 depth + GS reconstruction.  Tries built-in gs_ply first, falls back to manual point cloud."""
     import torch
     from depth_anything_3.api import DepthAnything3
@@ -156,14 +156,13 @@ def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 1
     torch.cuda.empty_cache()
 
     N, H, W = depths.shape
-    # Optimize density based on frame count and performance
-    base_points = min(500000, max_points)  # Cap base points
-    target_points = int(base_points * density_factor)
-    # Limit total points to prevent timeout
-    max_safe_points = min(1500000, target_points)  # Max 1.5M points for timeout safety
+    # Apply density factor for enhanced quality
+    target_points = int(max_points * density_factor)
+    # Conservative limit to prevent timeout
+    max_safe_points = min(1000000, target_points)  # Max 1M points
     pixels_per_frame = max(1, max_safe_points // N)
     step = max(1, int(np.sqrt(H * W / pixels_per_frame)))
-    print(f"Optimized sampling: every {step} pixels/frame ({pixels_per_frame} target/frame, {density_factor}x density, max {max_safe_points} total)")
+    print(f"Enhanced sampling: every {step} pixels/frame ({pixels_per_frame} target/frame, {density_factor}x density, max {max_safe_points} total)")
 
     v_idx, u_idx = np.mgrid[0:H:step, 0:W:step]
     v_flat = v_idx.ravel().astype(np.float32)
@@ -208,18 +207,18 @@ def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 1
     points = np.concatenate(all_points, axis=0)
     colors = np.concatenate(all_colors, axis=0)
 
-    # Final safety check to prevent timeout
+    # Apply safety limits
     if len(points) > max_safe_points:
         idx = np.random.choice(len(points), max_safe_points, replace=False)
         points = points[idx]
         colors = colors[idx]
-        print(f"Final safety limit: reduced to {max_safe_points} points")
+        print(f"Safety limit: reduced to {max_safe_points} points")
     elif len(points) > max_points:
         idx = np.random.choice(len(points), max_points, replace=False)
         points = points[idx]
         colors = colors[idx]
-    
-    print(f"Final point cloud: {len(points)} points (density: {density_factor}x, optimized for performance)")
+
+    print(f"Point cloud: {len(points)} points (density: {density_factor}x, enhanced quality)")
 
     ply_path = os.path.join(export_dir, "reconstruction.ply")
     _save_pointcloud_ply(points, colors, ply_path)
@@ -284,12 +283,7 @@ def convert_ply_to_splat(ply_path: str, splat_path: str) -> str:
         scales = np.column_stack([vertex["scale_0"], vertex["scale_1"], vertex["scale_2"]])
         scales = np.exp(scales)
     else:
-        # Adaptive scale: compute from bounding box & point density so splats overlap
-        bbox = positions.max(axis=0) - positions.min(axis=0)
-        avg_spacing = np.cbrt(bbox[0] * bbox[1] * bbox[2] / max(num_points, 1))
-        default_scale = max(avg_spacing * 0.8, 0.005)
-        print(f"[convert] No scale data — bbox={bbox}, adaptive scale={default_scale:.4f}")
-        scales = np.ones((num_points, 3), dtype=np.float32) * default_scale
+        scales = np.ones((num_points, 3), dtype=np.float32) * 0.01
 
     # Rotations (quaternion)
     if "rot_0" in prop_names:
@@ -357,175 +351,6 @@ def convert_ply_to_splat(ply_path: str, splat_path: str) -> str:
     return splat_path
 
 
-def generate_mesh_from_pointcloud(points, colors, output_path, method="poisson"):
-    """Generate mesh from point cloud using different algorithms."""
-    try:
-        import open3d as o3d
-    except ImportError:
-        print("Open3D not available, mesh generation skipped")
-        return None
-
-    print(f"Generating mesh using {method} method...")
-    
-    # Create point cloud
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    
-    # Estimate normals
-    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=30))
-    
-    # Orient normals consistently
-    pcd.orient_normals_consistent_tangent_plane(100)
-    
-    if method == "poisson":
-        # Poisson surface reconstruction
-        with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug) as cm:
-            mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-                pcd, depth=9
-            )
-        
-        # Remove low density vertices
-        densities = np.asarray(densities)
-        density_threshold = np.percentile(densities, 1)
-        vertices_to_remove = densities < density_threshold
-        mesh.remove_vertices_by_mask(vertices_to_remove)
-        
-    elif method == "ball_pivoting":
-        # Ball pivoting algorithm
-        radii = [0.005, 0.01, 0.02, 0.04]
-        mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
-            pcd, o3d.utility.DoubleVector(radii)
-        )
-    else:
-        # Alpha shapes
-        alpha = 0.03
-        mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, alpha)
-    
-    # Optional: Smooth the mesh
-    mesh = mesh.smooth_taubin_filter(number_of_iterations=50, lambda_filter=0.5)
-    
-    # Compute vertex normals for proper shading
-    mesh.compute_vertex_normals()
-    
-    # Save the mesh
-    o3d.io.write_triangle_mesh(output_path, mesh)
-    
-    print(f"Mesh saved: {output_path}")
-    print(f"Vertices: {len(mesh.vertices)}, Faces: {len(mesh.triangles)}")
-    
-    return output_path
-
-
-def convert_mesh_to_formats(mesh_path, output_dir, base_name):
-    """Convert mesh to multiple formats (FBX, OBJ, DAE, etc.)."""
-    try:
-        import trimesh
-    except ImportError:
-        print("Trimesh not available, format conversion skipped")
-        return {}
-    
-    formats = {
-        'obj': {'ext': '.obj', 'save_texture': True},
-        'dae': {'ext': '.dae', 'save_texture': True},
-        'stl': {'ext': '.stl', 'save_texture': False},
-        'glb': {'ext': '.glb', 'save_texture': True},
-        'ply_mesh': {'ext': '.ply', 'save_texture': True},
-    }
-    
-    converted_files = {}
-    
-    try:
-        # Load mesh with trimesh for format conversion
-        mesh = trimesh.load(mesh_path)
-        
-        for format_name, config in formats.items():
-            output_path = os.path.join(output_dir, f"{base_name}{config['ext']}")
-            
-            try:
-                if format_name == 'obj':
-                    # OBJ with MTL file for materials
-                    mesh.export(output_path, include_texture=config['save_texture'])
-                elif format_name == 'glb':
-                    # GLB (binary glTF)
-                    mesh.export(output_path)
-                elif format_name == 'stl':
-                    # STL (no colors/textures)
-                    mesh.export(output_path)
-                else:
-                    # Other formats
-                    mesh.export(output_path)
-                
-                file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-                converted_files[format_name] = {
-                    'path': output_path,
-                    'size_mb': file_size_mb,
-                    'has_texture': config['save_texture']
-                }
-                print(f"Converted to {format_name.upper()}: {output_path} ({file_size_mb:.1f} MB)")
-                
-            except Exception as e:
-                print(f"Failed to convert to {format_name}: {e}")
-        
-        # Try FBX conversion (requires special library)
-        try:
-            import fbx
-            fbx_path = os.path.join(output_dir, f"{base_name}.fbx")
-            # Note: FBX conversion requires additional setup
-            # This is a placeholder for FBX conversion
-            print("FBX conversion requires additional FBX SDK setup")
-        except ImportError:
-            print("FBX SDK not available for FBX conversion")
-        
-        return converted_files
-        
-    except Exception as e:
-        print(f"Mesh conversion failed: {e}")
-        return {}
-
-
-def extract_texture_from_images(images_dir, mesh_vertices, mesh_faces, output_texture_path):
-    """Extract texture from original images and map to mesh UV coordinates."""
-    try:
-        import cv2
-        from PIL import Image
-    except ImportError:
-        print("OpenCV/PIL not available for texture extraction")
-        return None
-    
-    print("Extracting texture from images...")
-    
-    # Collect all image files
-    image_files = sorted([f for f in os.listdir(images_dir) 
-                         if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
-    
-    if not image_files:
-        print("No images found for texture extraction")
-        return None
-    
-    # Create a simple texture by blending images
-    textures = []
-    for img_file in image_files[:10]:  # Limit to first 10 images
-        img_path = os.path.join(images_dir, img_file)
-        img = cv2.imread(img_path)
-        if img is not None:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            textures.append(img)
-    
-    if not textures:
-        return None
-    
-    # Create texture atlas by blending
-    avg_texture = np.mean(textures, axis=0).astype(np.uint8)
-    
-    # Save texture
-    texture_pil = Image.fromarray(avg_texture)
-    texture_pil.save(output_texture_path)
-    
-    print(f"Texture saved: {output_texture_path}")
-    return output_texture_path
-
-
 def handler(event):
     """RunPod serverless entrypoint."""
     job_input = event["input"]
@@ -578,10 +403,6 @@ def handler(event):
 
     max_frames = job_input.get("max_frames", 100)
     video_ext = job_input.get("video_ext", "mp4")
-    density_factor = job_input.get("density_factor", 2.0)
-    generate_mesh = job_input.get("generate_mesh", False)
-    mesh_method = job_input.get("mesh_method", "poisson")
-    export_formats = job_input.get("export_formats", ["splat"])
 
     work_dir = tempfile.mkdtemp(prefix="4d_", dir=WORKSPACE)
     images_dir = os.path.join(work_dir, "images")
@@ -594,114 +415,53 @@ def handler(event):
         runpod.serverless.progress_update(event, {"progress": 5, "message": "Receiving video..."})
         video_path = os.path.join(work_dir, f"input.{video_ext}")
 
-        if "frames_data" in job_input:
-            # Pre-extracted JPEG frames from browser (Canvas API)
-            frames_list = job_input["frames_data"]
-            print(f"Receiving {len(frames_list)} pre-extracted frames...")
-            for i, frame_b64 in enumerate(frames_list):
-                frame_bytes = base64.b64decode(frame_b64)
-                frame_path = os.path.join(images_dir, f"frame_{i:04d}.jpg")
-                with open(frame_path, "wb") as f:
-                    f.write(frame_bytes)
-            num_frames = len(frames_list)
-            print(f"Saved {num_frames} frames from browser")
-        elif "video_data" in job_input:
+        if "video_data" in job_input:
             print("Decoding base64 video data...")
             video_bytes = base64.b64decode(job_input["video_data"])
             with open(video_path, "wb") as f:
                 f.write(video_bytes)
             print(f"Video decoded: {len(video_bytes)} bytes")
-            # Extract frames from video
-            runpod.serverless.progress_update(event, {"progress": 10, "message": "Extracting frames from video..."})
-            num_frames = extract_frames(video_path, images_dir, max_frames)
         elif "video_url" in job_input:
             download_video(job_input["video_url"], video_path)
-            # Extract frames from video
-            runpod.serverless.progress_update(event, {"progress": 10, "message": "Extracting frames from video..."})
-            num_frames = extract_frames(video_path, images_dir, max_frames)
         else:
-            return {"error": "No frames_data, video_data, or video_url provided"}
+            return {"error": "No video_data or video_url provided"}
+
+        # Step 2: Extract frames
+        runpod.serverless.progress_update(event, {"progress": 10, "message": "Extracting frames from video..."})
+        num_frames = extract_frames(video_path, images_dir, max_frames)
 
         if num_frames < 2:
             return {"error": f"Only {num_frames} frame(s) extracted. Need at least 2. Try a longer video."}
 
         # Step 3: DA3 — depth estimation + camera poses → 3D point cloud
         runpod.serverless.progress_update(event, {"progress": 20, "message": "Running Depth Anything V3 reconstruction..."})
-        ply_path = run_da3_reconstruction(images_dir, export_dir, max_points=1000000, density_factor=density_factor)
+        ply_path = run_da3_reconstruction(images_dir, export_dir, max_points=500000, density_factor=density_factor)
 
-        # Load point cloud data for mesh generation
-        from plyfile import PlyData
-        plydata = PlyData.read(ply_path)
-        vertex = plydata["vertex"]
-        points = np.column_stack([vertex["x"], vertex["y"], vertex["z"]])
-        colors = np.column_stack([vertex["red"], vertex["green"], vertex["blue"]]).astype(np.float32) / 255.0
-
-        # Step 4: Generate mesh if requested
-        mesh_files = {}
-        if generate_mesh:
-            runpod.serverless.progress_update(event, {"progress": 60, "message": "Generating 3D mesh..."})
-            mesh_path = os.path.join(export_dir, f"{job_id}_mesh.obj")
-            
-            if generate_mesh_from_pointcloud(points, colors, mesh_path, method=mesh_method):
-                # Extract texture
-                texture_path = os.path.join(export_dir, f"{job_id}_texture.jpg")
-                extract_texture_from_images(images_dir, points, None, texture_path)
-                
-                # Convert to multiple formats
-                runpod.serverless.progress_update(event, {"progress": 70, "message": "Converting to multiple formats..."})
-                mesh_files = convert_mesh_to_formats(mesh_path, export_dir, f"{job_id}_mesh")
-            else:
-                runpod.serverless.progress_update(event, {"progress": 70, "message": "Mesh generation failed, continuing with point cloud..."})
-
-        # Step 5: Convert to requested formats
-        runpod.serverless.progress_update(event, {"progress": 80, "message": "Converting to web formats..."})
-        output_files = {}
-        
-        # Always generate splat for web viewer
+        # Step 4: Convert to .splat for web viewer
+        runpod.serverless.progress_update(event, {"progress": 80, "message": "Converting to web format..."})
         splat_path = os.path.join(work_dir, f"{job_id}.splat")
         convert_ply_to_splat(ply_path, splat_path)
-        output_files["splat"] = splat_path
-        
-        # Add mesh files if generated
-        output_files.update(mesh_files)
-        
-        # Step 6: Encode and return results
-        runpod.serverless.progress_update(event, {"progress": 90, "message": "Encoding results..."})
-        
-        # Encode each requested format
-        encoded_files = {}
-        for format_name, file_path in output_files.items():
-            if format_name in export_formats or format_name == "splat":  # Always include splat
-                with open(file_path, "rb") as f:
-                    raw_data = f.read()
-                compressed = gzip.compress(raw_data, compresslevel=6)
-                encoded_data = base64.b64encode(compressed).decode("utf-8")
-                encoded_files[format_name] = {
-                    "data": encoded_data,
-                    "compressed": True,
-                    "size_mb": len(raw_data) / (1024 * 1024),
-                    "compressed_mb": len(compressed) / (1024 * 1024)
-                }
 
-        print(f"Processed {num_frames} frames, density: {density_factor}x")
-        print(f"Generated formats: {list(encoded_files.keys())}")
+        # Step 5: Gzip compress + base64 encode (RunPod has ~10MB payload limit)
+        runpod.serverless.progress_update(event, {"progress": 90, "message": "Compressing & encoding result..."})
+        with open(splat_path, "rb") as f:
+            raw_data = f.read()
+        compressed = gzip.compress(raw_data, compresslevel=6)
+        splat_data = base64.b64encode(compressed).decode("utf-8")
 
-        result = {
-            "files": encoded_files,
-            "formats": list(encoded_files.keys()),
+        raw_mb = len(raw_data) / (1024 * 1024)
+        compressed_mb = len(compressed) / (1024 * 1024)
+        b64_mb = len(splat_data) / (1024 * 1024)
+        print(f"Splat: {raw_mb:.1f} MB raw → {compressed_mb:.1f} MB gzip → {b64_mb:.1f} MB base64")
+        print(f"Frames processed: {num_frames}")
+
+        return {
+            "splat_data": splat_data,
+            "splat_compressed": True,
             "num_frames": num_frames,
-            "density_factor": density_factor,
-            "mesh_generated": generate_mesh,
             "progress": 100,
             "message": "3D reconstruction complete!",
         }
-        
-        # For backward compatibility, include splat_data
-        if "splat" in encoded_files:
-            result["splat_data"] = encoded_files["splat"]["data"]
-            result["splat_compressed"] = encoded_files["splat"]["compressed"]
-        
-        return result
 
     except subprocess.CalledProcessError as e:
         error_msg = f"Pipeline step failed: {e.cmd[0] if e.cmd else 'unknown'}"
