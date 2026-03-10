@@ -86,7 +86,7 @@ def extract_frames(video_path: str, output_dir: str, max_frames: int = 100) -> i
 MODEL_ID = "depth-anything/DA3NESTED-GIANT-LARGE"
 
 
-def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 2000000, density_factor: float = 2.0) -> str:
+def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 1000000, density_factor: float = 2.0) -> str:
     """Run DA3 depth + GS reconstruction.  Tries built-in gs_ply first, falls back to manual point cloud."""
     import torch
     from depth_anything_3.api import DepthAnything3
@@ -156,11 +156,14 @@ def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 2
     torch.cuda.empty_cache()
 
     N, H, W = depths.shape
-    # Increase density based on density_factor
-    target_points = int(max_points * density_factor)
-    pixels_per_frame = max(1, target_points // N)
+    # Optimize density based on frame count and performance
+    base_points = min(500000, max_points)  # Cap base points
+    target_points = int(base_points * density_factor)
+    # Limit total points to prevent timeout
+    max_safe_points = min(1500000, target_points)  # Max 1.5M points for timeout safety
+    pixels_per_frame = max(1, max_safe_points // N)
     step = max(1, int(np.sqrt(H * W / pixels_per_frame)))
-    print(f"High-density sampling: every {step} pixels/frame ({pixels_per_frame} target/frame, {density_factor}x density)")
+    print(f"Optimized sampling: every {step} pixels/frame ({pixels_per_frame} target/frame, {density_factor}x density, max {max_safe_points} total)")
 
     v_idx, u_idx = np.mgrid[0:H:step, 0:W:step]
     v_flat = v_idx.ravel().astype(np.float32)
@@ -205,12 +208,18 @@ def run_da3_reconstruction(images_dir: str, export_dir: str, max_points: int = 2
     points = np.concatenate(all_points, axis=0)
     colors = np.concatenate(all_colors, axis=0)
 
-    if len(points) > max_points:
+    # Final safety check to prevent timeout
+    if len(points) > max_safe_points:
+        idx = np.random.choice(len(points), max_safe_points, replace=False)
+        points = points[idx]
+        colors = colors[idx]
+        print(f"Final safety limit: reduced to {max_safe_points} points")
+    elif len(points) > max_points:
         idx = np.random.choice(len(points), max_points, replace=False)
         points = points[idx]
         colors = colors[idx]
     
-    print(f"Dense point cloud: {len(points)} points (density: {density_factor}x)")
+    print(f"Final point cloud: {len(points)} points (density: {density_factor}x, optimized for performance)")
 
     ply_path = os.path.join(export_dir, "reconstruction.ply")
     _save_pointcloud_ply(points, colors, ply_path)
@@ -618,7 +627,7 @@ def handler(event):
 
         # Step 3: DA3 — depth estimation + camera poses → 3D point cloud
         runpod.serverless.progress_update(event, {"progress": 20, "message": "Running Depth Anything V3 reconstruction..."})
-        ply_path = run_da3_reconstruction(images_dir, export_dir, max_points=2000000, density_factor=density_factor)
+        ply_path = run_da3_reconstruction(images_dir, export_dir, max_points=1000000, density_factor=density_factor)
 
         # Load point cloud data for mesh generation
         from plyfile import PlyData
