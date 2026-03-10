@@ -94,10 +94,35 @@ function submitVideoInBackground(
         videoBuffer = buffer;
       }
 
-      // Step 2: Base64 encode and send as video_data
-      const videoBase64 = videoBuffer.toString("base64");
-      const payloadMB = (videoBase64.length / 1024 / 1024).toFixed(2);
-      console.log(`[upload] Sending ${payloadMB} MB base64 as video_data to RunPod...`);
+      // Step 2: Check payload size and compress if needed
+      let videoBase64 = videoBuffer.toString("base64");
+      let payloadMB = parseFloat((videoBase64.length / 1024 / 1024).toFixed(2));
+      
+      // If payload is too large, compress more aggressively
+      if (payloadMB > 8) {  // Leave 2MB margin for other parameters
+        console.log(`[upload] Payload ${payloadMB}MB too large, compressing more...`);
+        updateJob(jobId, { message: "Compressing more to fit size limits..." });
+        
+        try {
+          // Compress with lower bitrate and resolution
+          videoBuffer = await compressVideoAggressive(buffer, ext);
+          videoBase64 = videoBuffer.toString("base64");
+          payloadMB = parseFloat((videoBase64.length / 1024 / 1024).toFixed(2));
+          console.log(`[upload] Aggressive compression: ${payloadMB} MB`);
+          updateJob(jobId, { message: `Aggressively compressed to ${payloadMB} MB...` });
+        } catch (e) {
+          console.log(`[upload] Aggressive compression failed: ${e}`);
+          // If still too large, reduce frames
+          if (payloadMB > 8) {
+            const reducedFrames = Math.floor(maxFrames * 0.5);  // Reduce by 50%
+            console.log(`[upload] Reducing frames from ${maxFrames} to ${reducedFrames}`);
+            maxFrames = reducedFrames;
+            updateJob(jobId, { message: `Reducing frames to fit size limits...` });
+          }
+        }
+      }
+      
+      console.log(`[upload] Final payload: ${payloadMB} MB`);
       updateJob(jobId, { message: `Uploading to GPU cluster (${payloadMB} MB)...` });
 
       const runpodResponse = await submitJob({
@@ -155,6 +180,43 @@ async function compressVideo(buffer: Buffer, ext: string): Promise<Buffer> {
       ], { timeout: 60_000 }, (err, _stdout, stderr) => {
         if (err) {
           console.log(`[ffmpeg] stderr: ${stderr?.slice(-500)}`);
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
+    return await readFile(outputPath);
+  } finally {
+    await unlink(inputPath).catch(() => {});
+    await unlink(outputPath).catch(() => {});
+  }
+}
+
+/**
+ * Aggressive compression for large videos: 240p, CRF 38, max 15 seconds.
+ * Used when payload exceeds 8MB limit.
+ */
+async function compressVideoAggressive(buffer: Buffer, ext: string): Promise<Buffer> {
+  const inputPath = join(tmpdir(), `4d_in_aggressive_${Date.now()}.${ext}`);
+  const outputPath = join(tmpdir(), `4d_out_aggressive_${Date.now()}.mp4`);
+  await writeFile(inputPath, buffer);
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile("ffmpeg", [
+        "-y", "-i", inputPath,
+        "-vf", "scale=-2:240",  // Lower resolution
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "38",  // Higher compression
+        "-an",  // No audio
+        "-movflags", "+faststart",
+        "-t", "15",  // Max 15 seconds
+        outputPath,
+      ], { timeout: 60_000 }, (err, _stdout, stderr) => {
+        if (err) {
+          console.log(`[ffmpeg aggressive] stderr: ${stderr?.slice(-500)}`);
           reject(err);
         } else {
           resolve();
