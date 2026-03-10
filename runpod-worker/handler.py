@@ -353,7 +353,7 @@ def generate_mesh_from_pointcloud(points, colors, output_path, method="poisson")
     try:
         import open3d as o3d
     except ImportError:
-        print("Open3D not available, skipping mesh generation")
+        print("Open3D not available, mesh generation skipped")
         return None
 
     print(f"Generating mesh using {method} method...")
@@ -410,7 +410,11 @@ def generate_mesh_from_pointcloud(points, colors, output_path, method="poisson")
 
 def convert_mesh_to_formats(mesh_path, output_dir, base_name):
     """Convert mesh to multiple formats (FBX, OBJ, DAE, etc.)."""
-    import trimesh
+    try:
+        import trimesh
+    except ImportError:
+        print("Trimesh not available, format conversion skipped")
+        return {}
     
     formats = {
         'obj': {'ext': '.obj', 'save_texture': True},
