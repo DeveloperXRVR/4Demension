@@ -58,11 +58,11 @@ const statusConfig = {
 };
 
 const pipelineSteps = [
-  { id: "receive", label: "Receiving Video", threshold: 5 },
-  { id: "extract", label: "Extracting Frames", threshold: 10 },
-  { id: "da3", label: "Depth Anything V3 + Gaussian Splatting", threshold: 20 },
-  { id: "convert", label: "Converting to Web Format", threshold: 80 },
-  { id: "encode", label: "Encoding Result", threshold: 90 },
+  { id: "receive", label: "Получение видео", threshold: 5 },
+  { id: "extract", label: "Извлечение кадров", threshold: 10 },
+  { id: "da3", label: "3D реконструкция VlasovAI", threshold: 20 },
+  { id: "convert", label: "Конвертация в веб-формат", threshold: 80 },
+  { id: "encode", label: "Кодирование результата", threshold: 90 },
 ];
 
 export default function ProcessingStatus({ jobId }: { jobId: string }) {
@@ -106,13 +106,13 @@ export default function ProcessingStatus({ jobId }: { jobId: string }) {
     return (
       <div className="max-w-2xl mx-auto p-8 text-center">
         <XCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-        <h2 className="text-xl font-bold mb-2">Error</h2>
+        <h2 className="text-xl font-bold mb-2">Ошибка</h2>
         <p className="text-zinc-400 mb-6">{error}</p>
         <button
           onClick={() => router.push("/")}
           className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl transition-colors"
         >
-          Back to Upload
+          Назад к загрузке
         </button>
       </div>
     );
@@ -122,7 +122,7 @@ export default function ProcessingStatus({ jobId }: { jobId: string }) {
     return (
       <div className="max-w-2xl mx-auto p-8 text-center">
         <Loader2 className="w-8 h-8 animate-spin text-violet-400 mx-auto mb-4" />
-        <p className="text-zinc-400">Loading job status...</p>
+        <p className="text-zinc-400">Загрузка статуса задачи...</p>
       </div>
     );
   }
@@ -140,12 +140,12 @@ export default function ProcessingStatus({ jobId }: { jobId: string }) {
           <div className="flex-1">
             <h2 className={`text-lg font-bold ${config.color}`}>
               {job.status === "completed"
-                ? "Reconstruction Complete!"
+                ? "Реконструкция завершена!"
                 : job.status === "failed"
-                ? "Processing Failed"
+                ? "Ошибка обработки"
                 : job.status === "queued"
-                ? "Waiting in Queue"
-                : "Reconstructing 3D Model..."}
+                ? "Ожидание в очереди"
+                : "Реконструкция 3D модели..."}
             </h2>
             <p className="text-sm text-zinc-400 mt-1">{job.message}</p>
           </div>
@@ -173,7 +173,7 @@ export default function ProcessingStatus({ jobId }: { jobId: string }) {
       {/* Pipeline Steps */}
       <div className="p-6 rounded-2xl bg-zinc-900 border border-zinc-800">
         <h3 className="text-sm font-semibold text-zinc-400 mb-4 uppercase tracking-wider">
-          Pipeline Progress
+          Прогресс конвейера
         </h3>
         <div className="space-y-3">
           {pipelineSteps.map((step) => {
@@ -221,17 +221,17 @@ export default function ProcessingStatus({ jobId }: { jobId: string }) {
       <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/50">
         <div className="grid grid-cols-3 gap-4 text-center">
           <div>
-            <p className="text-xs text-zinc-500">Quality</p>
+            <p className="text-xs text-zinc-500">Качество</p>
             <p className="text-sm font-medium capitalize">{job.quality}</p>
           </div>
           <div>
-            <p className="text-xs text-zinc-500">Job ID</p>
+            <p className="text-xs text-zinc-500">ИД задачи</p>
             <p className="text-sm font-mono text-zinc-400">
               {job.id.slice(0, 8)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-zinc-500">Video</p>
+            <p className="text-xs text-zinc-500">Видео</p>
             <p className="text-sm truncate">{job.videoFilename}</p>
           </div>
         </div>
@@ -240,11 +240,11 @@ export default function ProcessingStatus({ jobId }: { jobId: string }) {
       {/* Action Buttons */}
       {job.status === "completed" && (
         <button
-          onClick={() => router.push(`/viewer/${job.id}`)}
+          onClick={() => router.push(`/viewer/?id=${job.id}`)}
           className="w-full py-4 px-6 rounded-xl font-semibold bg-gradient-to-r from-green-600 to-emerald-500 hover:from-green-500 hover:to-emerald-400 text-white flex items-center justify-center gap-3 shadow-lg shadow-green-600/20 transition-all"
         >
           <Eye className="w-5 h-5" />
-          View 3D Model
+          Просмотр 3D модели
           <ArrowRight className="w-5 h-5" />
         </button>
       )}
@@ -255,7 +255,7 @@ export default function ProcessingStatus({ jobId }: { jobId: string }) {
           className="w-full py-4 px-6 rounded-xl font-semibold bg-zinc-800 hover:bg-zinc-700 text-white flex items-center justify-center gap-3 transition-all"
         >
           <RotateCcw className="w-5 h-5" />
-          Try Again
+          Попробовать снова
         </button>
       )}
     </div>

@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# 4Demension Launcher Script
+# Starts the webapp and opens browser
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WEBAPP_DIR="$SCRIPT_DIR/../../webapp"
+
+# Check if webapp directory exists
+if [ ! -d "$WEBAPP_DIR" ]; then
+    osascript -e 'display dialog "4Demension webapp directory not found!" buttons={"OK"} default button "OK"'
+    exit 1
+fi
+
+# Change to webapp directory
+cd "$WEBAPP_DIR"
+
+# Check if node_modules exists, if not install dependencies
+if [ ! -d "node_modules" ]; then
+    echo "Installing dependencies..."
+    npm install
+fi
+
+# Start the development server in background
+echo "Starting 4Demension webapp..."
+npm run dev > /tmp/4demension.log 2>&1 &
+DEV_PID=$!
+
+# Wait a moment for server to start
+sleep 3
+
+# Open browser to localhost:3000
+open http://localhost:3000
+
+# Show notification
+osascript -e 'display notification "4Demension webapp started!" with title "4Demension"'
+
+# Keep the launcher running (you can close this window)
+echo "4Demension is running at http://localhost:3000"
+echo "Close this window to stop the server."
+echo "Process ID: $DEV_PID"
+
+# Wait for user to close terminal or interrupt
+trap 'kill $DEV_PID 2>/dev/null; exit' INT TERM
+wait $DEV_PID

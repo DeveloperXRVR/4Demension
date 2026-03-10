@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+.git
+.gitignore
+*.md
+.env*.local
+public/uploads/*
+public/models/*
+!public/uploads/.gitkeep
+!public/models/.gitkeep

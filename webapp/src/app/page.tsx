@@ -5,18 +5,18 @@ import { Camera, Cpu, Box, Sparkles } from "lucide-react";
 const features = [
   {
     icon: <Camera className="w-6 h-6 text-violet-400" />,
-    title: "Upload Video",
-    desc: "Record or upload video walking around your subject — any camera works",
+    title: "Загрузить видео",
+    desc: "Запишите или загрузите видео вокруг объекта — подойдёт любая камера",
   },
   {
     icon: <Cpu className="w-6 h-6 text-violet-400" />,
-    title: "GPU Processing",
-    desc: "Depth Anything V3 + 3D Gaussian Splatting on RunPod GPU cluster",
+    title: "GPU обработка",
+    desc: "Реконструкция 3D модели на мощных GPU — только технология VlasovAI",
   },
   {
     icon: <Box className="w-6 h-6 text-violet-400" />,
-    title: "View in 3D",
-    desc: "Interactive Gaussian Splat viewer — rotate, zoom, and explore your model",
+    title: "Просмотр в 3D",
+    desc: "Интерактивный 3D-просмотрщик — вращайте, масштабируйте, исследуйте",
   },
 ];
 
@@ -30,16 +30,16 @@ export default function Home() {
         <div className="max-w-3xl mx-auto text-center mb-12">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-violet-600/10 border border-violet-500/20 text-violet-400 text-xs font-medium mb-6">
             <Sparkles className="w-3.5 h-3.5" />
-            Powered by Depth Anything V3 & 3D Gaussian Splatting
+            Только технология VlasovAI
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold mb-4 leading-tight">
-            Turn <span className="gradient-text">Video</span> into{" "}
-            <span className="gradient-text">3D Models</span>
+            Превратите <span className="gradient-text">видео</span> в{" "}
+            <span className="gradient-text">3D модель</span>
           </h1>
           <p className="text-lg text-zinc-400 max-w-xl mx-auto">
-            Upload video footage of any scene or object. Our pipeline
-            reconstructs a photorealistic 3D Gaussian Splat model you can
-            explore right in your browser.
+            Загрузите видео любой сцены или объекта. Наш конвейер
+            создаст фотореалистичную 3D модель, которую можно
+            исследовать прямо в браузере.
           </p>
         </div>
 
@@ -64,25 +64,8 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-zinc-800/50 py-6 px-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between text-xs text-zinc-600">
-          <span>4Demension — Video to 3D Reconstruction</span>
-          <div className="flex items-center gap-4">
-            <a
-              href="https://github.com/ByteDance-Seed/depth-anything-3"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-zinc-400 transition-colors"
-            >
-              Depth Anything V3
-            </a>
-            <a
-              href="https://www.runpod.io"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-zinc-400 transition-colors"
-            >
-              RunPod
-            </a>
-          </div>
+          <span>VlasovAI 4D map — Видео в 3D реконструкцию</span>
+          <span>Только технология VlasovAI</span>
         </div>
       </footer>
     </div>

@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import { saveVideo } from "@/lib/storage";
-import { createJob } from "@/lib/jobs";
+import { createJob, updateJob } from "@/lib/jobs";
 import { submitJob } from "@/lib/runpod";
+import { execFile } from "child_process";
+import { writeFile, readFile, unlink } from "fs/promises";
+import { join } from "path";
+import { tmpdir } from "os";
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,73 +13,42 @@ export async function POST(req: NextRequest) {
     const file = formData.get("video") as File | null;
     const quality = (formData.get("quality") as string) || "balanced";
     const maxFrames = parseInt(formData.get("maxFrames") as string) || 200;
+    const densityFactor = parseFloat(formData.get("density_factor") as string) || 2.0;
+    const generateMesh = formData.get("generate_mesh") === "true";
+    const meshMethod = (formData.get("mesh_method") as string) || "poisson";
+    const exportFormats = JSON.parse((formData.get("export_formats") as string) || '["splat"]');
 
     if (!file) {
       return NextResponse.json({ error: "No video file provided" }, { status: 400 });
     }
 
-    const allowedTypes = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo"];
-    if (!allowedTypes.includes(file.type)) {
-      return NextResponse.json(
-        { error: "Invalid file type. Supported: MP4, WebM, MOV, AVI" },
-        { status: 400 }
-      );
-    }
-
-    const maxSize = 500 * 1024 * 1024; // 500MB
-    if (file.size > maxSize) {
-      return NextResponse.json(
-        { error: "File too large. Maximum size is 500MB" },
-        { status: 400 }
-      );
-    }
-
     const jobId = uuidv4();
     const ext = file.name.split(".").pop() || "mp4";
-    const filename = `${jobId}.${ext}`;
-
     const buffer = Buffer.from(await file.arrayBuffer());
-    const videoUrl = await saveVideo(filename, buffer);
+    const rawMB = (buffer.length / 1024 / 1024).toFixed(1);
+    console.log(`[upload] Received ${rawMB} MB video (${ext})`);
+    console.log(`[upload] Settings: density=${densityFactor}x, mesh=${generateMesh}, method=${meshMethod}, formats=${exportFormats.join(",")}`);
 
-    // Create job record
     const job = createJob({
       id: jobId,
       status: "uploading",
-      videoFilename: filename,
-      videoUrl,
+      videoFilename: file.name,
+      videoUrl: "",
       quality: quality as "fast" | "balanced" | "ultra",
       maxFrames,
       progress: 0,
-      message: "Video uploaded, submitting to processing queue...",
+      message: "Compressing video for transfer...",
     });
 
-    // Submit to RunPod
-    const useRunPod = process.env.RUNPOD_API_KEY && process.env.RUNPOD_ENDPOINT_ID;
+    const apiKey = process.env.RUNPOD_API_KEY;
+    const endpointId = process.env.RUNPOD_ENDPOINT_ID;
+    console.log(`[upload] RUNPOD_API_KEY=${apiKey ? apiKey.slice(0, 10) + "..." : "MISSING"}, ENDPOINT=${endpointId || "MISSING"}`);
 
-    if (useRunPod) {
-      try {
-        // Send video as base64 directly to RunPod (no tunnel needed)
-        const videoBase64 = buffer.toString("base64");
-
-        const runpodResponse = await submitJob({
-          video_data: videoBase64,
-          video_ext: ext,
-          quality: quality as "fast" | "balanced" | "ultra",
-          max_frames: maxFrames,
-        });
-
-        job.runpodId = runpodResponse.id;
-        job.status = "queued";
-        job.message = "Job submitted to GPU cluster, waiting in queue...";
-      } catch (err) {
-        console.error("RunPod submit error:", err);
-        job.status = "queued";
-        job.message = "RunPod submission pending - configure RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID";
-      }
+    if (apiKey && endpointId) {
+      submitVideoInBackground(jobId, buffer, ext, quality, maxFrames, densityFactor, generateMesh, meshMethod, exportFormats);
     } else {
-      // Demo mode - simulate processing
       job.status = "queued";
-      job.message = "Demo mode: Configure RunPod credentials for GPU processing. Using simulated pipeline.";
+      job.message = "Demo mode: Configure RunPod credentials for GPU processing.";
       simulateProcessing(jobId);
     }
 
@@ -91,6 +63,108 @@ export async function POST(req: NextRequest) {
       { error: "Failed to process upload" },
       { status: 500 }
     );
+  }
+}
+
+/**
+ * Compress video with ffmpeg, base64 encode, send as video_data to RunPod.
+ * ffmpeg shrinks 3.3MB → ~200KB, making the RunPod upload fast and reliable.
+ */
+function submitVideoInBackground(
+  jobId: string, buffer: Buffer, ext: string,
+  quality: string, maxFrames: number, densityFactor: number,
+  generateMesh: boolean, meshMethod: string, exportFormats: string[]
+) {
+  (async () => {
+    try {
+      const rawMB = (buffer.length / 1024 / 1024).toFixed(1);
+
+      // Step 1: Compress with ffmpeg
+      updateJob(jobId, { message: `Compressing video (${rawMB} MB)...` });
+      let videoBuffer: Buffer;
+      let videoExt = ext;
+      try {
+        videoBuffer = await compressVideo(buffer, ext);
+        videoExt = "mp4";
+        const compMB = (videoBuffer.length / 1024 / 1024).toFixed(2);
+        console.log(`[upload] Compressed ${rawMB} MB → ${compMB} MB`);
+        updateJob(jobId, { message: `Compressed to ${compMB} MB, uploading to GPU...` });
+      } catch (e) {
+        console.log(`[upload] ffmpeg compression failed, using raw: ${e instanceof Error ? e.message : e}`);
+        videoBuffer = buffer;
+      }
+
+      // Step 2: Base64 encode and send as video_data
+      const videoBase64 = videoBuffer.toString("base64");
+      const payloadMB = (videoBase64.length / 1024 / 1024).toFixed(2);
+      console.log(`[upload] Sending ${payloadMB} MB base64 as video_data to RunPod...`);
+      updateJob(jobId, { message: `Uploading to GPU cluster (${payloadMB} MB)...` });
+
+      const runpodResponse = await submitJob({
+        video_data: videoBase64,
+        video_ext: videoExt,
+        quality: quality as "fast" | "balanced" | "ultra",
+        max_frames: maxFrames,
+        density_factor: densityFactor,
+        generate_mesh: generateMesh,
+        mesh_method: meshMethod,
+        export_formats: exportFormats,
+      });
+
+      updateJob(jobId, {
+        runpodId: runpodResponse.id,
+        status: "queued",
+        message: "Job submitted to GPU cluster, waiting in queue...",
+      });
+      console.log(`[upload] RunPod job submitted: ${runpodResponse.id}`);
+    } catch (err: unknown) {
+      let errMsg = "Unknown error";
+      if (err instanceof Error) {
+        errMsg = err.message;
+        if (err.cause) errMsg += ` (cause: ${err.cause instanceof Error ? err.cause.message : String(err.cause)})`;
+      } else {
+        errMsg = String(err);
+      }
+      console.error("RunPod submit error:", errMsg);
+      updateJob(jobId, { status: "failed", message: `RunPod submission failed: ${errMsg}` });
+    }
+  })();
+}
+
+/**
+ * Compress video with ffmpeg: 320p, CRF 32, no audio, ultrafast.
+ * Typical result: 3.3MB → ~150-300KB.
+ */
+async function compressVideo(buffer: Buffer, ext: string): Promise<Buffer> {
+  const inputPath = join(tmpdir(), `4d_in_${Date.now()}.${ext}`);
+  const outputPath = join(tmpdir(), `4d_out_${Date.now()}.mp4`);
+  await writeFile(inputPath, buffer);
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile("ffmpeg", [
+        "-y", "-i", inputPath,
+        "-vf", "scale=-2:320",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "32",
+        "-an",
+        "-movflags", "+faststart",
+        "-t", "30",
+        outputPath,
+      ], { timeout: 60_000 }, (err, _stdout, stderr) => {
+        if (err) {
+          console.log(`[ffmpeg] stderr: ${stderr?.slice(-500)}`);
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
+    return await readFile(outputPath);
+  } finally {
+    await unlink(inputPath).catch(() => {});
+    await unlink(outputPath).catch(() => {});
   }
 }
 

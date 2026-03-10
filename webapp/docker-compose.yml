@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  webapp:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - RUNPOD_ENDPOINT_ID=${RUNPOD_ENDPOINT_ID}
+    volumes:
+      - uploads:/app/public/uploads
+      - models:/app/public/models
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  models:

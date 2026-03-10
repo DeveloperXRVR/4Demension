@@ -13,7 +13,7 @@ export default function Navbar() {
               <Box className="w-8 h-8 text-violet-500 group-hover:text-violet-400 transition-colors" />
               <Layers3 className="w-4 h-4 text-violet-300 absolute -bottom-1 -right-1" />
             </div>
-            <span className="text-xl font-bold gradient-text">4Demension</span>
+            <span className="text-xl font-bold gradient-text">VlasovAI 4D map</span>
           </Link>
 
           <div className="flex items-center gap-6">
@@ -21,24 +21,11 @@ export default function Navbar() {
               href="/"
               className="text-sm text-zinc-400 hover:text-white transition-colors"
             >
-              Upload
+              Загрузить
             </Link>
-            <a
-              href="https://github.com/ByteDance-Seed/depth-anything-3"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-zinc-400 hover:text-white transition-colors"
-            >
-              Depth Anything V3
-            </a>
-            <a
-              href="https://www.runpod.io"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-zinc-400 hover:text-white transition-colors"
-            >
-              RunPod
-            </a>
+            <span className="text-sm text-zinc-500">
+              Только технология VlasovAI
+            </span>
           </div>
         </div>
       </div>

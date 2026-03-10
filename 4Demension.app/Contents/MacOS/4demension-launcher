@@ -1,0 +1,28 @@
+#!/usr/bin/osascript
+
+# 4Demension App Launcher - Background Service Version
+# Runs like a real app - no terminal window needed
+
+on run
+    try
+        set serviceScript to "/Users/macos/Desktop/Developer/4Demension/4demension-service"
+        
+        -- Start the background service
+        do shell script serviceScript & " start"
+        
+        return "4Demension started in background"
+        
+    on error errMsg
+        display dialog "Failed to start 4Demension: " & errMsg buttons {"OK"} default button "OK"
+        return "Error: " & errMsg
+    end try
+end run
+
+-- Handle quit event to stop the service
+on quit
+    try
+        set serviceScript to "/Users/macos/Desktop/Developer/4Demension/4demension-service"
+        do shell script serviceScript & " stop"
+    end try
+    continue quit
+end quit
