@@ -403,6 +403,7 @@ def handler(event):
 
     max_frames = job_input.get("max_frames", 100)
     video_ext = job_input.get("video_ext", "mp4")
+    density_factor = job_input.get("density_factor", 2.0)
 
     work_dir = tempfile.mkdtemp(prefix="4d_", dir=WORKSPACE)
     images_dir = os.path.join(work_dir, "images")
