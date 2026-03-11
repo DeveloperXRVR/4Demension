@@ -271,6 +271,14 @@ def convert_ply_to_splat(ply_path: str, splat_path: str) -> str:
     vertex = plydata["vertex"]
     num_points = len(vertex)
     print(f"Converting {num_points} Gaussians to .splat")
+    
+    # Safety check: if too many points, sample down to prevent memory issues
+    max_safe_points = 2000000  # 2M points max for splat conversion
+    if num_points > max_safe_points:
+        print(f"Too many points ({num_points}), sampling down to {max_safe_points}")
+        indices = np.random.choice(num_points, max_safe_points, replace=False)
+        vertex = vertex[indices]
+        num_points = max_safe_points
 
     # Extract properties - handle different PLY formats
     prop_names = [p.name for p in vertex.properties]
@@ -437,11 +445,35 @@ def handler(event):
         # Step 3: DA3 — depth estimation + camera poses → 3D point cloud
         runpod.serverless.progress_update(event, {"progress": 20, "message": "Running Depth Anything V3 reconstruction..."})
         ply_path = run_da3_reconstruction(images_dir, export_dir, max_points=500000, density_factor=density_factor)
+        
+        # Verify PLY file was created and has content
+        if not os.path.exists(ply_path):
+            return {"error": "PLY file was not created during reconstruction"}
+        
+        ply_size = os.path.getsize(ply_path)
+        if ply_size == 0:
+            return {"error": "PLY file is empty - reconstruction failed"}
+        
+        print(f"PLY file created: {ply_path} ({ply_size / (1024*1024):.1f} MB)")
 
         # Step 4: Convert to .splat for web viewer
         runpod.serverless.progress_update(event, {"progress": 80, "message": "Converting to web format..."})
         splat_path = os.path.join(work_dir, f"{job_id}.splat")
-        convert_ply_to_splat(ply_path, splat_path)
+        
+        try:
+            convert_ply_to_splat(ply_path, splat_path)
+        except Exception as e:
+            return {"error": f"Splat conversion failed: {str(e)}"}
+        
+        # Verify splat file was created
+        if not os.path.exists(splat_path):
+            return {"error": "Splat file was not created"}
+        
+        splat_size = os.path.getsize(splat_path)
+        if splat_size == 0:
+            return {"error": "Splat file is empty"}
+        
+        print(f"Splat file created: {splat_path} ({splat_size / (1024*1024):.1f} MB)")
 
         # Step 5: Gzip compress + base64 encode (RunPod has ~10MB payload limit)
         runpod.serverless.progress_update(event, {"progress": 90, "message": "Compressing & encoding result..."})
